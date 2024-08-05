@@ -1,0 +1,7 @@
+# Alias
+alias ld=lazydocker
+alias lg=lazygit
+alias vi=vim
+
+# fzf
+[ -f ~/.fzf.zsh ] && source ~/.fzf.zsh
