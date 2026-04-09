@@ -654,9 +654,11 @@ def build_run_steps(workout_code: str, reps: int, duration_mins: int) -> list:
 # API HELPERS
 # ─────────────────────────────────────────────
 
-def api_post_event(payload: dict, dry_run: bool = False) -> dict:
+def api_post_event(payload: dict, dry_run: bool = False, verbose: bool = False) -> dict:
     if dry_run:
         print(f"  [DRY RUN] Would POST: {payload['name']} on {payload.get('start_date_local', payload.get('start_date', ''))}")
+        if verbose:
+            print(json.dumps(payload, indent=2))
         return {}
 
     url = f"{BASE_URL}/{ATHLETE_ID}/events"
@@ -851,16 +853,6 @@ def build_payload(row: dict) -> dict:
 
     description = "\n\n".join(body_parts)
 
-    # Build workout doc
-    workout_doc = {"description": description}
-
-    # Add structured steps for quality runs
-    if code in ("run_cruise", "run_threshold", "run_threshold_hard") and reps and int_mins:
-        steps = build_run_steps(code, reps, int_mins)
-        if steps:
-            workout_doc["steps"] = steps
-            workout_doc["target"] = "HR"
-
     # Resolve start datetime
     start_dt = resolve_start_datetime(date, code, start_time_override, mins)
 
@@ -871,13 +863,34 @@ def build_payload(row: dict) -> dict:
     # category is a top-level event field (not inside workout_doc)
     # Valid values: WORKOUT, NOTE, RACE, TARGET
     event_category = WORKOUT_CATEGORIES.get(code, "WORKOUT")
+
     payload = {
-        "start_date_local": start_dt,  # Intervals.icu REST API field name
-        "name":         base_name,
-        "category":     event_category,
-        "type":         sport,        # raw REST API uses "type", not "workout_type"
-        "workout_doc":  workout_doc,
+        "start_date_local": start_dt,
+        "name":             base_name,
+        "category":         event_category,
+        "type":             sport,
     }
+
+    # NOTE and RACE events must not include workout_doc — the API rejects it
+    if event_category not in ("NOTE", "RACE"):
+        workout_doc = {"description": description}
+
+        # Structured steps for quality runs
+        if code in ("run_cruise", "run_threshold", "run_threshold_hard") and reps and int_mins:
+            steps = build_run_steps(code, reps, int_mins)
+            if steps:
+                workout_doc["steps"] = steps
+
+        payload["workout_doc"] = workout_doc
+
+        # target is a top-level field, not inside workout_doc
+        if code in ("run_cruise", "run_threshold", "run_threshold_hard") and reps and int_mins:
+            payload["target"] = "HR"
+
+    # RACE: just send distance and description as a plain note field
+    if event_category == "RACE":
+        payload["description"] = description
+
     if moving_time:
         payload["moving_time"] = moving_time
     if distance_m:
@@ -897,6 +910,8 @@ def main():
     parser.add_argument("csv_file", help="Path to the training plan CSV")
     parser.add_argument("--dry-run", action="store_true",
                         help="Print what would be posted without sending to API")
+    parser.add_argument("--verbose", action="store_true",
+                        help="Print full payload JSON in dry-run mode")
     parser.add_argument("--clear", action="store_true",
                         help="Delete existing events in CSV date range before importing")
     parser.add_argument("--contexts", metavar="CONTEXTS_CSV",
@@ -958,7 +973,7 @@ def main():
                 skipped += 1
                 continue
 
-        result = api_post_event(payload, dry_run=args.dry_run)
+        result = api_post_event(payload, dry_run=args.dry_run, verbose=getattr(args, 'verbose', False))
         if result or args.dry_run:
             print(f"  ✅ {payload.get('start_date_local', payload.get('start_date', ''))} — {payload['name']}")
             success += 1
